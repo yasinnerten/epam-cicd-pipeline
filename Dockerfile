@@ -1,4 +1,4 @@
-FROM node:7.8.0
+FROM --platform=linux/amd64 node:16-alpine
 
 ARG PORT=3000
 ARG BRANCH=main
