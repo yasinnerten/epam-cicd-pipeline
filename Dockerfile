@@ -1,5 +1,15 @@
 FROM node:7.8.0
+
+ARG PORT=3000
+ARG BRANCH=main
+
+ENV PORT=${PORT}
+ENV BRANCH=${BRANCH}
+
 WORKDIR /opt
 ADD . /opt
 RUN npm install
-ENTRYPOINT npm run start
+
+EXPOSE ${PORT}
+
+CMD ["sh", "-c", "npm start -- --port ${PORT}"]
