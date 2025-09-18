@@ -1,92 +1,109 @@
 pipeline {
     agent any
     
+    parameters {
+        choice(
+            name: 'BRANCH',
+            choices: ['main', 'dev'],
+            description: 'Select branch to deploy'
+        )
+        choice(
+            name: 'ACTION',
+            choices: ['deploy', 'stop', 'restart'],
+            description: 'Select deployment action'
+        )
+    }
+    
     environment {
-        DOCKER_IMAGE = "${env.JOB_NAME}:${env.BUILD_NUMBER}"
-        PORT = "${env.BRANCH_NAME == 'main' ? '3000' : '3001'}"
+        PORT = "${params.BRANCH == 'main' ? '3000' : '3001'}"
+        REPO_URL = 'https://github.com/yasinnerten/epam-cicd-pipeline.git'
     }
     
     stages {
         stage('Checkout') {
             steps {
-                echo "Checking out ${env.BRANCH_NAME} branch"
-                checkout scm
-            }
-        }
-        
-        stage('Build') {
-            steps {
                 script {
-                    echo "Building application for ${env.BRANCH_NAME} branch"
-                    sh '''
-                        echo "Building application..."
-                        # Example: npm install (adjust based on your application)
-                        # npm install
-                    '''
+                    echo "Manually deploying ${params.BRANCH} branch"
+                    git branch: "${params.BRANCH}", url: "${REPO_URL}"
                 }
             }
         }
         
-        stage('Test') {
+        stage('Pre-Build Cleanup') {
             steps {
                 script {
-                    echo "Running tests for ${env.BRANCH_NAME} branch"
-                    sh '''
-                        echo "Running tests..."
-                        # Example: npm test (adjust based on your application)
-                        # npm test
-                    '''
-                }
-            }
-        }
-        
-        stage('Build Docker Image') {
-            steps {
-                script {
-                    echo "Building Docker image for ${env.BRANCH_NAME} branch on port ${PORT}"
+                    echo "🧹 Pre-build cleanup for ${env.BRANCH_NAME} branch"
                     sh """
-                        docker build -t ${DOCKER_IMAGE} \
+                        # Kill any processes using the target port
+                        sudo lsof -ti:${PORT} | xargs -r kill -9 || true
+                        
+                        # Clean up old containers and images
+                        docker container prune -f
+                        docker image prune -f
+                        
+                        # Stop containers that might conflict
+                        docker ps -q --filter "publish=${PORT}" | xargs -r docker stop || true
+                        docker ps -aq --filter "publish=${PORT}" | xargs -r docker rm || true
+                    """
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            when {
+                expression { params.ACTION == 'deploy' || params.ACTION == 'restart' }
+            }
+            steps {
+                script {
+                    sh """
+                        docker build -t manual-${params.BRANCH}:latest \
                         --build-arg PORT=${PORT} \
-                        --build-arg BRANCH=${env.BRANCH_NAME} .
+                        --build-arg BRANCH=${params.BRANCH} .
+                    """
+                }
+            }
+        }
+        
+        stage('Stop Existing') {
+            when {
+                expression { params.ACTION == 'stop' || params.ACTION == 'restart' || params.ACTION == 'deploy' }
+            }
+            steps {
+                script {
+                    sh """
+                        docker stop manual-${params.BRANCH}-app || true
+                        docker rm manual-${params.BRANCH}-app || true
                     """
                 }
             }
         }
         
         stage('Deploy') {
+            when {
+                expression { params.ACTION == 'deploy' || params.ACTION == 'restart' }
+            }
             steps {
                 script {
-                    echo "Deploying ${env.BRANCH_NAME} branch on port ${PORT}"
-                    
-                    // Stop existing container if running
-                    sh """
-                        docker stop ${env.BRANCH_NAME}-app || true
-                        docker rm ${env.BRANCH_NAME}-app || true
-                    """
-                    
-                    // Run new container
                     sh """
                         docker run -d \
-                        --name ${env.BRANCH_NAME}-app \
+                        --name manual-${params.BRANCH}-app \
                         -p ${PORT}:${PORT} \
-                        ${DOCKER_IMAGE}
+                        manual-${params.BRANCH}:latest
                     """
                     
-                    echo "Application deployed at http://localhost:${PORT}"
+                    echo "Manual deployment completed!"
+                    echo "Application is running at http://localhost:${PORT}"
                 }
             }
         }
     }
     
     post {
-        always {
-            echo "Pipeline completed for ${env.BRANCH_NAME} branch"
-        }
         success {
-            echo "Pipeline succeeded! Application is running on port ${PORT}"
+            echo "Manual deployment action '${params.ACTION}' completed successfully for ${params.BRANCH} branch"
         }
         failure {
-            echo "Pipeline failed!"
+            echo "Manual deployment failed!"
         }
     }
 }
